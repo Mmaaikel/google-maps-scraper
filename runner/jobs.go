@@ -28,6 +28,7 @@ func CreateSeedJobs(
 	dedup deduper.Deduper,
 	exitMonitor exiter.Exiter,
 	extraReviews bool,
+	validatePlaceIdUrl string,
 ) (jobs []scrapemate.IJob, err error) {
 	var lat, lon float64
 
@@ -138,7 +139,11 @@ func CreateSeedJobs(
 				opts = append(opts, gmaps.WithExtraReviews())
 			}
 
-			job = gmaps.NewGmapJob(id, langCode, query, maxDepth, email, geoCoordinates, zoom, opts...)
+			if validatePlaceIdUrl != "" {
+				opts = append(opts, gmaps.WithValidatePlaceIdUrl(validatePlaceIdUrl))
+			}
+
+			job = gmaps.NewGmapJob(id, langCode, query, maxDepth, email, geoCoordinates, zoom, validatePlaceIdUrl, opts...)
 		} else {
 			jparams := gmaps.MapSearchParams{
 				Location: gmaps.MapLocation{
