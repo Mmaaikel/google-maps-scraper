@@ -58,7 +58,6 @@ type Config struct {
 	ExitOnInactivityDuration time.Duration
 	Email                    bool
 	CustomWriter             string
-	GeoCoordinates           string
 	Zoom                     int
 	RunMode                  int
 	DisableTelemetry         bool
@@ -79,6 +78,8 @@ type Config struct {
 	Addr                     string
 	DisablePageReuse         bool
 	ExtraReviews             bool
+	GeoCoordinates           string
+	ValidatePlaceIdUrl       string
 }
 
 func ParseConfig() *Config {
@@ -125,6 +126,7 @@ func ParseConfig() *Config {
 	flag.StringVar(&cfg.Addr, "addr", ":8080", "address to listen on for web server")
 	flag.BoolVar(&cfg.DisablePageReuse, "disable-page-reuse", false, "disable page reuse in playwright")
 	flag.BoolVar(&cfg.ExtraReviews, "extra-reviews", false, "enable extra reviews collection")
+	flag.StringVar(&cfg.ValidatePlaceIdUrl, "validate-place-id-url", "", "set URL for validating place IDs")
 
 	flag.Parse()
 

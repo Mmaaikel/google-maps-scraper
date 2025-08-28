@@ -2,7 +2,9 @@ package gmaps
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -28,6 +30,7 @@ type GmapJob struct {
 	Deduper             deduper.Deduper
 	ExitMonitor         exiter.Exiter
 	ExtractExtraReviews bool
+	ValidatePlaceIdUrl  string
 }
 
 func NewGmapJob(
@@ -36,6 +39,7 @@ func NewGmapJob(
 	extractEmail bool,
 	geoCoordinates string,
 	zoom int,
+	validatePlaceIdUrl string,
 	opts ...GmapJobOptions,
 ) *GmapJob {
 	query = url.QueryEscape(query)
@@ -66,9 +70,10 @@ func NewGmapJob(
 			MaxRetries: maxRetries,
 			Priority:   prio,
 		},
-		MaxDepth:     maxDepth,
-		LangCode:     langCode,
-		ExtractEmail: extractEmail,
+		MaxDepth:           maxDepth,
+		LangCode:           langCode,
+		ExtractEmail:       extractEmail,
+		ValidatePlaceIdUrl: validatePlaceIdUrl,
 	}
 
 	for _, opt := range opts {
@@ -87,6 +92,12 @@ func WithDeduper(d deduper.Deduper) GmapJobOptions {
 func WithExitMonitor(e exiter.Exiter) GmapJobOptions {
 	return func(j *GmapJob) {
 		j.ExitMonitor = e
+	}
+}
+
+func WithValidatePlaceIdUrl(v string) GmapJobOptions {
+	return func(j *GmapJob) {
+		j.ValidatePlaceIdUrl = v
 	}
 }
 
@@ -127,6 +138,33 @@ func (j *GmapJob) Process(ctx context.Context, resp *scrapemate.Response) (any, 
 	} else {
 		doc.Find(`div[role=feed] div[jsaction]>a`).Each(func(_ int, s *goquery.Selection) {
 			if href := s.AttrOr("href", ""); href != "" {
+
+				if j.ValidatePlaceIdUrl != "" {
+					// Make GET request
+					resp, err := http.Get(j.ValidatePlaceIdUrl + "?url=" + url.QueryEscape(href))
+					if err != nil {
+						panic(err)
+					}
+					defer resp.Body.Close() // Always close response body
+
+					// Read response body
+					body, err := io.ReadAll(resp.Body)
+					if err != nil {
+						panic(err)
+					}
+
+					// Body is JSON, check if body has a field message and if it contains "placeid_found"
+					var result map[string]interface{}
+					if err := json.Unmarshal(body, &result); err != nil {
+						panic(err)
+					}
+
+					if message, ok := result["message"].(string); ok && strings.Contains(message, "placeid_found") {
+						// If found we go to the next item in the loop
+						return
+					}
+				}
+
 				jopts := []PlaceJobOptions{}
 				if j.ExitMonitor != nil {
 					jopts = append(jopts, WithPlaceJobExitMonitor(j.ExitMonitor))
