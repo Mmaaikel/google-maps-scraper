@@ -74,6 +74,8 @@ func ParseSearchResults(raw []byte) ([]*Entry, error) {
 
 		entry.PlusCode = olc.Encode(entry.Latitude, entry.Longtitude, 10)
 
+		entry.Raw = business
+
 		entries = append(entries, &entry)
 	}
 
