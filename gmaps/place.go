@@ -224,13 +224,11 @@ function parse() {
 	if (!appState) {
 		return null;
 	}
-
 	const keys = Object.keys(appState);
 	const key = keys[0];
 	if (appState[key] && appState[key][6]) {
 		return appState[key][6];
 	}
-
 	return null;
 }
 `
