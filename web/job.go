@@ -16,8 +16,10 @@ const (
 )
 
 type SelectParams struct {
-	Status string
-	Limit  int
+	Status   string
+	Limit    int
+	OrderBy  string // e.g., "date" or "created_at"
+	OrderDir string // "asc" or "desc"
 }
 
 type JobRepository interface {

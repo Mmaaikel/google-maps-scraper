@@ -1,29 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+LOGS_PATH=/webdata_logs
+
 # --- Configuration ---
 # The specific error message to look for in the log file.
 ERROR_MESSAGE="scrapemate exited"
 # Pattern to identify failed jobs. The script will check if 'numOfJobsFailed=X' where X > 0.
 JOB_FAILURE_PATTERN="numOfJobsFailed\":"
 # Path to the main scraper log file.
-LOGFILE=/app/logs/scraper.log
+LOGFILE=$LOGS_PATH/scraper.log
 # Path to the watchdog's own log file.
-WATCHDOG_LOG=/app/webdata/watchdog.log
+WATCHDOG_LOG=$LOGS_PATH/watchdog.log
 # Duration (in seconds) that the 'last_line' must remain unchanged before triggering a check.
 TIMEOUT=60
+# TIMEOUT=10
 # Total duration (in seconds) the last_line can remain unchanged, regardless of content,
 # before forcing an exit and container restart. This acts as a fallback.
 EXIT_TIMEOUT=300
+# EXIT_TIMEOUT=30
 # Maximum number of lines the LOGFILE can grow to before it's automatically trimmed.
-LOGFILE_MAX_LINES=500
+LOGFILE_MAX_LINES=200
 # The number of lines to retain in LOGFILE after a trim operation.
-LOGFILE_TRIM_TO_LINES=250
+LOGFILE_TRIM_TO_LINES=150
 
 # --- Initialization ---
 # Ensure the directory for log files exists.
-mkdir -p /app/webdata
-mkdir -p /app/logs
+mkdir -p "$LOGS_PATH"
 # Clear (truncate) the main scraper log file.
 : > "$LOGFILE"
 # Clear (truncate) the watchdog's log file.
@@ -121,7 +124,8 @@ while :; do
     # 1. The last line contains the primary ERROR_MESSAGE.
     # 2. The last line contains 'numOfJobsFailed=' with a number greater than 0.
     # 3. The log has been completely stable (no new lines or changes) for EXIT_TIMEOUT seconds.g.
-    if [[ "$last_line" == *"$ERROR_MESSAGE"* ]] || "$job_failed" || (( stable >= EXIT_TIMEOUT )); then
+    # if [[ "$last_line" == *"$ERROR_MESSAGE"* ]] || "$job_failed" || (( stable >= EXIT_TIMEOUT )); then
+    if [[ "$last_line" == *"$ERROR_MESSAGE"* ]] || "$job_failed"; then
       log "Stable for ${stable}s with last_line matching exit message or exceeding EXIT_TIMEOUT. Restarting container..."
       kill -TERM "$PID" 2>/dev/null || true
       exec 3<&-

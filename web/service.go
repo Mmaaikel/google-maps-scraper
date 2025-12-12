@@ -55,7 +55,12 @@ func (s *Service) Update(ctx context.Context, job *Job) error {
 }
 
 func (s *Service) SelectPending(ctx context.Context) ([]Job, error) {
-	return s.repo.Select(ctx, SelectParams{Status: StatusPending, Limit: 1})
+	return s.repo.Select(ctx, SelectParams{
+		Status:   StatusPending,
+		Limit:    1,
+		OrderBy:  "date", // or your actual date field name
+		OrderDir: "asc",  // oldest first
+	})
 }
 
 func (s *Service) GetCSV(_ context.Context, id string) (string, error) {
