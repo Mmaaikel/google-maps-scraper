@@ -12,10 +12,11 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/google/uuid"
-	"github.com/gosom/google-maps-scraper/deduper"
-	"github.com/gosom/google-maps-scraper/exiter"
 	"github.com/gosom/scrapemate"
 	"github.com/playwright-community/playwright-go"
+
+	"github.com/gosom/google-maps-scraper/deduper"
+	"github.com/gosom/google-maps-scraper/exiter"
 )
 
 type GmapJobOptions func(*GmapJob)
@@ -57,7 +58,7 @@ func NewGmapJob(
 	if geoCoordinates != "" && zoom > 0 {
 		mapURL = fmt.Sprintf("https://www.google.com/maps/search/%s/@%s,%dz", query, strings.ReplaceAll(geoCoordinates, " ", ""), zoom)
 	} else {
-		//Warning: geo and zoom MUST be both set or not
+		// Warning: geo and zoom MUST be both set or not
 		mapURL = fmt.Sprintf("https://www.google.com/maps/search/%s", query)
 	}
 
@@ -201,7 +202,6 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page playwright.Page) scra
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
 		Timeout:   playwright.Float(navigationTimeout),
 	})
-
 	if err != nil {
 		resp.Error = fmt.Errorf("navigation failed: %w", err)
 		fmt.Printf("Navigation error: %v\n", err)
@@ -209,10 +209,7 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page playwright.Page) scra
 		return resp
 	}
 
-	if err = clickRejectCookiesIfRequired(page); err != nil {
-		fmt.Printf("Cookie rejection error (non-fatal): %v\n", err)
-		// Don't return yet, continue with the process
-	}
+	clickRejectCookiesIfRequired(page)
 
 	const defaultTimeout = 5000
 
@@ -221,7 +218,6 @@ func (j *GmapJob) BrowserActions(ctx context.Context, page playwright.Page) scra
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
 		Timeout:   playwright.Float(defaultTimeout),
 	})
-
 	if err != nil {
 		fmt.Printf("URL stabilization error (non-fatal): %v\n", err)
 		// Don't return yet, continue with the process
@@ -336,27 +332,23 @@ func waitUntilURLContains(ctx context.Context, page playwright.Page, s string) b
 	}
 }
 
-func clickRejectCookiesIfRequired(page playwright.Page) error {
-	// click the cookie reject button if exists
-	sel := `form[action="https://consent.google.com/save"]:first-of-type button:first-of-type`
+func clickRejectCookiesIfRequired(page playwright.Page) {
+	sel := `form[action="https://consent.google.com/save"] input[type="submit"]`
 
-	const timeout = 500
+	locator := page.Locator(sel)
 
-	//nolint:staticcheck // TODO replace with the new playwright API
-	el, err := page.WaitForSelector(sel, playwright.PageWaitForSelectorOptions{
-		Timeout: playwright.Float(timeout),
-	})
-
+	count, err := locator.Count()
 	if err != nil {
-		return nil
+		return
 	}
 
-	if el == nil {
-		return nil
+	if count == 0 {
+		return
 	}
 
-	//nolint:staticcheck // TODO replace with the new playwright API
-	return el.Click()
+	_ = locator.First().Click(playwright.LocatorClickOptions{
+		Timeout: playwright.Float(2000),
+	})
 }
 
 func scroll(ctx context.Context,
