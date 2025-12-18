@@ -83,16 +83,6 @@ A no-code Google Maps scraper that pulls business leads from Google Maps in one 
 
 <hr>
 
-[Scrapeless](https://www.scrapeless.com/): One-click to scrape Google search results, supporting 15+ SERP scenarios such as Google Maps/Scholars/Jobs, $0.1/thousand queries, 0.2s response.
-
-**[👉 Free Trial](https://app.scrapeless.com/passport/login?utm_source=gosom&utm_campaign=google-maps)**
-
-![Scrapeless](./img/scrapeless_dark.png#gh-dark-mode-only)
-
-![Scrapeless](./img/scrapeless_light.png#gh-light-mode-only)
-
-<hr>
-
 [Decodo's proxies](https://visit.decodo.com/APVbbx) with #1 response time in the market
 
 Collect data without facing CAPTCHAs, IP bans, or geo-restrictions
@@ -107,15 +97,6 @@ Collect data without facing CAPTCHAs, IP bans, or geo-restrictions
 
 <hr>
 
-
-[Thordata proxies](https://www.thordata.com/?ls=github&lk=google-maps)
-
-- Precision Targeting, Global Coverage. Starting at $1.80 - Reliable Data Collection, Every Time.
-- Contact Thordata to start your 3-day free trial starting at 100MB
-
-[![Thordata Banner](./img/thordata-banner.png)](https://www.thordata.com/?ls=github&lk=google-maps)
-
-<hr>
 
 
 ## What Google maps scraper does
@@ -357,7 +338,7 @@ output instead of CSV.
 
 (tested only on Ubuntu 22.04)
 
-**make sure you use go version 1.25.3**
+**make sure you use go version 1.25.5**
 
 
 ```
@@ -639,14 +620,6 @@ Thank you for considering support for the project. Every bit of assistance helps
 
 ### Special Thanks to:
 
-[Thordata proxies](https://www.thordata.com/?ls=github&lk=google-maps)
-
-- Precision Targeting, Global Coverage. Starting at $1.80 - Reliable Data Collection, Every Time.
-- Contact Thordata to start your 3-day free trial starting at 100MB
-
-[![Thordata Banner](./img/thordata-banner.png)](https://www.thordata.com/?ls=github&lk=google-maps)
-
-<br>
 
 [Decodo's proxies](https://visit.decodo.com/APVbbx) with #1 response time in the market
 
@@ -659,17 +632,6 @@ Collect data without facing CAPTCHAs, IP bans, or geo-restrictions
 **[Start your 3-day free trial with 100MB →](https://visit.decodo.com/APVbbx)**
 
 ![Decodo](./img/decodo.png)
-
-<br>
-
-[Scrapeless](https://www.scrapeless.com/): One-click to scrape Google search results, supporting 15+ SERP scenarios such as Google Maps/Scholars/Jobs, $0.1/thousand queries, 0.2s response.
-
-**[👉 Free Trial](https://app.scrapeless.com/passport/login?utm_source=gosom&utm_campaign=google-maps)**
-
-![Scrapeless](./img/scrapeless_dark.png#gh-dark-mode-only)
-
-![Scrapeless](./img/scrapeless_light.png#gh-light-mode-only)
-
 
 <br>
 
