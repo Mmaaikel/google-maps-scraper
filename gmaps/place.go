@@ -3,13 +3,11 @@ package gmaps
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gosom/scrapemate"
-	"github.com/playwright-community/playwright-go"
 
 	"github.com/gosom/google-maps-scraper/exiter"
 )
@@ -19,10 +17,11 @@ type PlaceJobOptions func(*PlaceJob)
 type PlaceJob struct {
 	scrapemate.Job
 
-	UsageInResultststs  bool
-	ExtractEmail        bool
-	ExitMonitor         exiter.Exiter
-	ExtractExtraReviews bool
+	UsageInResults          bool
+	ExtractEmail            bool
+	ExitMonitor             exiter.Exiter
+	ExtractExtraReviews     bool
+	WriterManagedCompletion bool
 }
 
 func NewPlaceJob(parentID, langCode, u string, extractEmail, extraExtraReviews bool, opts ...PlaceJobOptions) *PlaceJob {
@@ -43,7 +42,7 @@ func NewPlaceJob(parentID, langCode, u string, extractEmail, extraExtraReviews b
 		},
 	}
 
-	job.UsageInResultststs = true
+	job.UsageInResults = true
 	job.ExtractEmail = extractEmail
 	job.ExtractExtraReviews = extraExtraReviews
 
@@ -60,6 +59,16 @@ func WithPlaceJobExitMonitor(exitMonitor exiter.Exiter) PlaceJobOptions {
 	}
 }
 
+func WithPlaceJobWriterManagedCompletion() PlaceJobOptions {
+	return func(j *PlaceJob) {
+		j.WriterManagedCompletion = true
+	}
+}
+
+func (j *PlaceJob) ProcessOnFetchError() bool {
+	return true
+}
+
 func (j *PlaceJob) Process(_ context.Context, resp *scrapemate.Response) (any, []scrapemate.IJob, error) {
 	defer func() {
 		resp.Document = nil
@@ -67,13 +76,29 @@ func (j *PlaceJob) Process(_ context.Context, resp *scrapemate.Response) (any, [
 		resp.Meta = nil
 	}()
 
+	if resp.Error != nil {
+		if j.ExitMonitor != nil {
+			j.ExitMonitor.IncrPlacesCompleted(1)
+		}
+
+		return nil, nil, resp.Error
+	}
+
 	raw, ok := resp.Meta["json"].([]byte)
 	if !ok {
+		if j.ExitMonitor != nil {
+			j.ExitMonitor.IncrPlacesCompleted(1)
+		}
+
 		return nil, nil, fmt.Errorf("could not convert to []byte")
 	}
 
 	entry, err := EntryFromJSON(raw)
 	if err != nil {
+		if j.ExitMonitor != nil {
+			j.ExitMonitor.IncrPlacesCompleted(1)
+		}
+
 		return nil, nil, err
 	}
 
@@ -83,9 +108,17 @@ func (j *PlaceJob) Process(_ context.Context, resp *scrapemate.Response) (any, [
 		entry.Link = j.GetFullURL()
 	}
 
-	allReviewsRaw, ok := resp.Meta["reviews_raw"].(fetchReviewsResponse)
+	// Handle RPC-based reviews
+	allReviewsRaw, ok := resp.Meta["reviews_raw"].(FetchReviewsResponse)
 	if ok && len(allReviewsRaw.pages) > 0 {
 		entry.AddExtraReviews(allReviewsRaw.pages)
+	}
+
+	// Handle DOM-based reviews (fallback)
+	domReviews, ok := resp.Meta["dom_reviews"].([]DOMReview)
+	if ok && len(domReviews) > 0 {
+		convertedReviews := ConvertDOMReviewsToReviews(domReviews)
+		entry.UserReviewsExtended = append(entry.UserReviewsExtended, convertedReviews...)
 	}
 
 	if j.ExtractEmail && entry.IsWebsiteValidForEmail() {
@@ -94,24 +127,26 @@ func (j *PlaceJob) Process(_ context.Context, resp *scrapemate.Response) (any, [
 			opts = append(opts, WithEmailJobExitMonitor(j.ExitMonitor))
 		}
 
+		if j.WriterManagedCompletion {
+			opts = append(opts, WithEmailJobWriterManagedCompletion())
+		}
+
 		emailJob := NewEmailJob(j.ID, &entry, opts...)
 
-		j.UsageInResultststs = false
+		j.UsageInResults = false
 
 		return nil, []scrapemate.IJob{emailJob}, nil
-	} else if j.ExitMonitor != nil {
+	} else if j.ExitMonitor != nil && !j.WriterManagedCompletion {
 		j.ExitMonitor.IncrPlacesCompleted(1)
 	}
 
 	return &entry, nil, err
 }
 
-func (j *PlaceJob) BrowserActions(ctx context.Context, page playwright.Page) scrapemate.Response {
+func (j *PlaceJob) BrowserActions(ctx context.Context, page scrapemate.BrowserPage) scrapemate.Response {
 	var resp scrapemate.Response
 
-	pageResponse, err := page.Goto(j.GetURL(), playwright.PageGotoOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-	})
+	pageResponse, err := page.Goto(j.GetURL(), scrapemate.WaitUntilDOMContentLoaded)
 	if err != nil {
 		resp.Error = err
 
@@ -120,25 +155,14 @@ func (j *PlaceJob) BrowserActions(ctx context.Context, page playwright.Page) scr
 
 	clickRejectCookiesIfRequired(page)
 
-	const defaultTimeout = 5000
+	const defaultTimeout = 5 * time.Second
 
-	err = page.WaitForURL(page.URL(), playwright.PageWaitForURLOptions{
-		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
-		Timeout:   playwright.Float(defaultTimeout),
-	})
-	if err != nil {
-		resp.Error = err
+	// Ignore WaitForURL errors — Google Maps may redirect slowly especially via proxy
+	_ = page.WaitForURL(page.URL(), defaultTimeout)
 
-		return resp
-	}
-
-	resp.URL = pageResponse.URL()
-	resp.StatusCode = pageResponse.Status()
-	resp.Headers = make(http.Header, len(pageResponse.Headers()))
-
-	for k, v := range pageResponse.Headers() {
-		resp.Headers.Add(k, v)
-	}
+	resp.URL = pageResponse.URL
+	resp.StatusCode = pageResponse.StatusCode
+	resp.Headers = pageResponse.Headers
 
 	raw, err := j.extractJSON(page)
 	if err != nil {
@@ -155,62 +179,106 @@ func (j *PlaceJob) BrowserActions(ctx context.Context, page playwright.Page) scr
 
 	if j.ExtractExtraReviews {
 		reviewCount := j.getReviewCount(raw)
-		if reviewCount > 8 { // we have more reviews
+		if reviewCount > 0 { // download reviews for any place that has them
 			params := fetchReviewsParams{
 				page:        page,
 				mapURL:      page.URL(),
 				reviewCount: reviewCount,
 			}
 
-			reviewFetcher := newReviewFetcher(params)
+			// Use the new fallback mechanism that tries RPC first, then DOM
+			rpcData, domReviews, err := FetchReviewsWithFallback(ctx, params)
 
-			reviewData, err := reviewFetcher.fetch(ctx)
-			if err != nil {
-				return resp
+			switch {
+			case err != nil:
+				fmt.Printf("Warning: review extraction failed: %v\n", err)
+			case len(rpcData.pages) > 0:
+				resp.Meta["reviews_raw"] = rpcData
+			case len(domReviews) > 0:
+				resp.Meta["dom_reviews"] = domReviews
 			}
-
-			resp.Meta["reviews_raw"] = reviewData
 		}
 	}
 
 	return resp
 }
 
-func (j *PlaceJob) extractJSON(page playwright.Page) ([]byte, error) {
-	var (
-		rawI any
-		err  error
-	)
+func (j *PlaceJob) getRaw(ctx context.Context, page scrapemate.BrowserPage) (any, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("timeout while getting raw data: %w", ctx.Err())
+		default:
+			raw, err := page.Eval(js)
+			if err != nil {
+				// Continue retrying on error
+				<-time.After(time.Millisecond * 200)
+				continue
+			}
 
-	// Retry logic: sometimes the data takes time to load
-	// Try up to 20 times with 1 second delay = 20 seconds total
-	for range 20 {
-		rawI, err = page.Evaluate(js)
-		if err == nil && rawI != nil {
-			break
+			// Check for valid non-null result.
+			// JS null may arrive as nil, and empty strings are not useful here.
+			if raw == nil {
+				<-time.After(time.Millisecond * 200)
+				continue
+			}
+
+			// If it's a string, make sure it's not empty
+			if str, ok := raw.(string); ok {
+				if str == "" {
+					<-time.After(time.Millisecond * 200)
+					continue
+				}
+			}
+
+			return raw, nil
+		}
+	}
+}
+
+func (j *PlaceJob) extractJSON(page scrapemate.BrowserPage) ([]byte, error) {
+	const maxRetries = 2
+
+	for attempt := range maxRetries {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		rawI, err := j.getRaw(ctx, page)
+
+		cancel()
+
+		if err != nil {
+			// On timeout, try reloading the page
+			if attempt < maxRetries-1 {
+				if reloadErr := page.Reload(scrapemate.WaitUntilDOMContentLoaded); reloadErr == nil {
+					continue
+				}
+			}
+
+			return nil, err
 		}
 
-		time.Sleep(1 * time.Second)
+		if rawI == nil {
+			if attempt < maxRetries-1 {
+				if reloadErr := page.Reload(scrapemate.WaitUntilDOMContentLoaded); reloadErr == nil {
+					continue
+				}
+			}
+
+			return nil, fmt.Errorf("APP_INITIALIZATION_STATE data not found")
+		}
+
+		raw, ok := rawI.(string)
+		if !ok {
+			return nil, fmt.Errorf("could not convert to string, got type %T", rawI)
+		}
+
+		const prefix = `)]}'`
+
+		raw = strings.TrimSpace(strings.TrimPrefix(raw, prefix))
+
+		return []byte(raw), nil
 	}
 
-	if err != nil {
-		return nil, err
-	}
-
-	if rawI == nil {
-		return nil, fmt.Errorf("APP_INITIALIZATION_STATE data not found")
-	}
-
-	raw, ok := rawI.(string)
-	if !ok {
-		return nil, fmt.Errorf("could not convert to string, got type %T", rawI)
-	}
-
-	const prefix = `)]}'`
-
-	raw = strings.TrimSpace(strings.TrimPrefix(raw, prefix))
-
-	return []byte(raw), nil
+	return nil, fmt.Errorf("APP_INITIALIZATION_STATE data not found after retries")
 }
 
 func (j *PlaceJob) getReviewCount(data []byte) int {
@@ -223,7 +291,7 @@ func (j *PlaceJob) getReviewCount(data []byte) int {
 }
 
 func (j *PlaceJob) UseInResults() bool {
-	return j.UsageInResultststs
+	return j.UsageInResults
 }
 
 const js = `
@@ -232,13 +300,19 @@ const js = `
 		return null;
 	}
 	const appState = window.APP_INITIALIZATION_STATE[3];
-	const keys = Object.keys(appState);
-	if (keys.length === 0) {
-		return null;
-	}
-	const key = keys[0];
-	if (appState[key] && appState[key][6]) {
-		return appState[key][6];
+	
+	// Search all properties of appState for arrays containing JSON strings
+	for (const key of Object.keys(appState)) {
+		const arr = appState[key];
+		if (Array.isArray(arr)) {
+			// Check indices 6 and 5 (where place data typically is)
+			for (const idx of [6, 5]) {
+				const item = arr[idx];
+				if (typeof item === 'string' && item.startsWith(")]}'")) {
+					return item;
+				}
+			}
+		}
 	}
 	return null;
 })()

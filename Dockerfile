@@ -1,23 +1,29 @@
 # Build stage for Playwright dependencies
 FROM ubuntu:20.04 AS playwright-deps
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
-#ENV PLAYWRIGHT_DRIVER_PATH=/opt/
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
+ARG TARGETARCH
+ARG PLAYWRIGHT_GO_VERSION=v0.6100.0
+
 RUN export PATH=$PATH:/usr/local/go/bin:/root/go/bin \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl wget \
-    && wget -q https://go.dev/dl/go1.25.5.linux-amd64.tar.gz \
-    && tar -C /usr/local -xzf go1.25.5.linux-amd64.tar.gz \
-    && rm go1.25.5.linux-amd64.tar.gz \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+    && if [ "$TARGETARCH" = "arm64" ]; then \
+         GO_ARCH="arm64"; \
+       else \
+         GO_ARCH="amd64"; \
+       fi \
+    && wget -q "https://go.dev/dl/go1.26.5.linux-${GO_ARCH}.tar.gz" \
+    && tar -C /usr/local -xzf "go1.26.5.linux-${GO_ARCH}.tar.gz" \
+    && rm "go1.26.5.linux-${GO_ARCH}.tar.gz" \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
-    && go install github.com/playwright-community/playwright-go/cmd/playwright@latest \
+    && go install github.com/mxschmitt/playwright-go/cmd/playwright@${PLAYWRIGHT_GO_VERSION} \
     && mkdir -p /opt/browsers \
     && playwright install chromium --with-deps
 
 # Build stage
-FROM golang:1.25.5-trixie AS builder
+FROM golang:1.26.5-trixie AS builder
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -27,7 +33,7 @@ RUN CGO_ENABLED=0 go build -ldflags="-w -s" -o /usr/bin/google-maps-scraper
 # Final stage
 FROM debian:trixie-slim
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/browsers
-ENV PLAYWRIGHT_DRIVER_PATH=/opt
+ENV PLAYWRIGHT_DRIVER_PATH=/opt/ms-playwright-go
 
 # Install only the necessary dependencies in a single layer
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -55,7 +61,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=playwright-deps /opt/browsers /opt/browsers
-COPY --from=playwright-deps /root/.cache/ms-playwright-go /opt/ms-playwright-go
+COPY --from=playwright-deps /opt/ms-playwright-go /opt/ms-playwright-go
 
 RUN chmod -R 755 /opt/browsers \
     && chmod -R 755 /opt/ms-playwright-go

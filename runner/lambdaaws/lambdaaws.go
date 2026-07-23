@@ -140,9 +140,18 @@ func (l *lambdaAwsRunner) getApp(_ context.Context, input lInput, out io.Writer)
 	opts := []func(*scrapemateapp.Config) error{
 		scrapemateapp.WithConcurrency(max(1, input.Concurrency)),
 		scrapemateapp.WithExitOnInactivity(time.Minute),
-		scrapemateapp.WithJS(
-			scrapemateapp.DisableImages(),
-		),
+	}
+
+	opts = append(opts, scrapemateapp.WithJS(
+		scrapemateapp.DisableImages(),
+	))
+
+	if input.MaxPagesPerBrowser > 1 {
+		opts = append(opts, scrapemateapp.WithMaxPagesPerBrowser(input.MaxPagesPerBrowser))
+	}
+
+	if input.BrowserPoolSize > 0 {
+		opts = append(opts, scrapemateapp.WithBrowserPoolSize(input.BrowserPoolSize))
 	}
 
 	if !input.DisablePageReuse {

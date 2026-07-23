@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -15,10 +16,12 @@ import (
 	"github.com/mattn/go-runewidth"
 	"golang.org/x/term"
 
+	"github.com/gosom/google-maps-scraper/internal/proxyconfig"
 	"github.com/gosom/google-maps-scraper/s3uploader"
 	"github.com/gosom/google-maps-scraper/tlmt"
 	"github.com/gosom/google-maps-scraper/tlmt/gonoop"
 	"github.com/gosom/google-maps-scraper/tlmt/goposthog"
+	"github.com/gosom/scrapemate/scrapemateapp"
 )
 
 const (
@@ -80,8 +83,18 @@ type Config struct {
 	ExtraReviews             bool
 	GeoCoordinates           string
 	ValidatePlaceIdUrl       string
+	LeadsDBAPIKey            string
+	BrowserPoolSize          int
+	MaxPagesPerBrowser       int
+
+	// Grid scraping — divide a bounding box into cells to bypass the ~120
+	// results-per-search limit imposed by Google Maps.
+	GridBBox   string  // "minLat,minLon,maxLat,maxLon"
+	GridCellKm float64 // size of each grid cell in km (default: 1.0)
+	Version    bool
 }
 
+//nolint:gocyclo // The cyclomatic complexity of this function is high due to the number of configuration options and validations.
 func ParseConfig() *Config {
 	cfg := Config{}
 
@@ -92,7 +105,8 @@ func ParseConfig() *Config {
 	}
 
 	var (
-		proxies string
+		proxies     string
+		proxiesFile string
 	)
 
 	flag.IntVar(&cfg.Concurrency, "c", min(runtime.NumCPU()/2, 1), "sets the concurrency [default: half of CPU cores]")
@@ -113,6 +127,7 @@ func ParseConfig() *Config {
 	flag.BoolVar(&cfg.WebRunner, "web", false, "run web server instead of crawling")
 	flag.StringVar(&cfg.DataFolder, "data-folder", "webdata", "data folder for web runner")
 	flag.StringVar(&proxies, "proxies", "", "comma separated list of proxies to use in the format protocol://user:pass@host:port example: socks5://localhost:9050 or http://user:pass@localhost:9050")
+	flag.StringVar(&proxiesFile, "proxies-file", "", "path to a file containing one proxy URL per line")
 	flag.BoolVar(&cfg.AwsLamdbaRunner, "aws-lambda", false, "run as AWS Lambda function")
 	flag.BoolVar(&cfg.AwsLambdaInvoker, "aws-lambda-invoker", false, "run as AWS Lambda invoker")
 	flag.StringVar(&cfg.FunctionName, "function-name", "", "AWS Lambda function name")
@@ -127,8 +142,36 @@ func ParseConfig() *Config {
 	flag.BoolVar(&cfg.DisablePageReuse, "disable-page-reuse", false, "disable page reuse in playwright")
 	flag.BoolVar(&cfg.ExtraReviews, "extra-reviews", false, "enable extra reviews collection")
 	flag.StringVar(&cfg.ValidatePlaceIdUrl, "validate-place-id-url", "", "set URL for validating place IDs")
+	flag.StringVar(&cfg.LeadsDBAPIKey, "leadsdb-api-key", "", "LeadsDB API key for exporting results to LeadsDB")
+	flag.StringVar(&cfg.GridBBox, "grid-bbox", "", "bounding box for grid scraping: 'minLat,minLon,maxLat,maxLon' (e.g. '40.30,-3.80,40.50,-3.60')")
+	flag.Float64Var(&cfg.GridCellKm, "grid-cell", 1.0, "grid cell size in km [default: 1.0]. Use with -grid-bbox")
+	flag.IntVar(&cfg.BrowserPoolSize, "browser-pool-size", 0, "number of browser contexts for JS mode; 0 derives from concurrency and pages-per-browser")
+	flag.IntVar(&cfg.MaxPagesPerBrowser, "pages-per-browser", 1, "maximum concurrent pages per browser context in JS mode")
+	flag.BoolVar(&cfg.Version, "version", false, "returns the version of the tool")
 
 	flag.Parse()
+
+	if cfg.Version {
+		info, ok := debug.ReadBuildInfo()
+		if !ok {
+			fmt.Println("build info not available")
+			os.Exit(1)
+		}
+
+		version := info.Main.Version
+
+		var commit string
+
+		for _, s := range info.Settings {
+			if s.Key == "vcs.revision" {
+				commit = s.Value[:7]
+			}
+		}
+
+		fmt.Printf("%s-%s\n", version, commit)
+
+		os.Exit(0)
+	}
 
 	if cfg.AwsAccessKey == "" {
 		cfg.AwsAccessKey = os.Getenv("MY_AWS_ACCESS_KEY")
@@ -170,9 +213,12 @@ func ParseConfig() *Config {
 		panic("Dsn must be provided when using ProduceOnly")
 	}
 
-	if proxies != "" {
-		cfg.Proxies = strings.Split(proxies, ",")
+	resolvedProxies, err := proxyconfig.Resolve(proxies, proxiesFile)
+	if err != nil {
+		panic(err)
 	}
+
+	cfg.Proxies = resolvedProxies
 
 	if cfg.AwsAccessKey != "" && cfg.AwsSecretKey != "" && cfg.AwsRegion != "" {
 		cfg.S3Uploader = s3uploader.New(cfg.AwsAccessKey, cfg.AwsSecretKey, cfg.AwsRegion)
@@ -292,6 +338,18 @@ func banner(messages []string, width int) string {
 	builder.WriteString("╚" + strings.Repeat("═", width-2) + "╝\n")
 
 	return builder.String()
+}
+
+func AppendBrowserCapacityOptions(opts []func(*scrapemateapp.Config) error, cfg *Config) []func(*scrapemateapp.Config) error {
+	if cfg.MaxPagesPerBrowser > 1 {
+		opts = append(opts, scrapemateapp.WithMaxPagesPerBrowser(cfg.MaxPagesPerBrowser))
+	}
+
+	if cfg.BrowserPoolSize > 0 {
+		opts = append(opts, scrapemateapp.WithBrowserPoolSize(cfg.BrowserPoolSize))
+	}
+
+	return opts
 }
 
 func Banner() {

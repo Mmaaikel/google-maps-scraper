@@ -11,6 +11,8 @@ import (
 
 	"github.com/gosom/google-maps-scraper/deduper"
 	"github.com/gosom/google-maps-scraper/exiter"
+	"github.com/gosom/google-maps-scraper/grid"
+	"github.com/gosom/google-maps-scraper/leadsdb"
 	"github.com/gosom/google-maps-scraper/runner"
 	"github.com/gosom/google-maps-scraper/tlmt"
 	"github.com/gosom/scrapemate"
@@ -75,20 +77,47 @@ func (r *fileRunner) Run(ctx context.Context) (err error) {
 	dedup := deduper.New()
 	exitMonitor := exiter.New()
 
-	seedJobs, err = runner.CreateSeedJobs(
-		r.cfg.FastMode,
-		r.cfg.LangCode,
-		r.input,
-		r.cfg.MaxDepth,
-		r.cfg.Email,
-		r.cfg.GeoCoordinates,
-		r.cfg.Zoom,
-		r.cfg.Radius,
-		dedup,
-		exitMonitor,
-		r.cfg.ExtraReviews,
-		r.cfg.ValidatePlaceIdUrl,
-	)
+	if r.cfg.GridBBox != "" {
+		if r.cfg.FastMode {
+			return fmt.Errorf("-fast-mode cannot be used together with -grid-bbox")
+		}
+
+		bbox, bboxErr := grid.ParseBoundingBox(r.cfg.GridBBox)
+		if bboxErr != nil {
+			return fmt.Errorf("invalid -grid-bbox: %w", bboxErr)
+		}
+
+		cellCount := grid.EstimateCellCount(bbox, r.cfg.GridCellKm)
+		fmt.Fprintf(os.Stderr, "grid scraping: ~%d cells (%.2f km each)\n", cellCount, r.cfg.GridCellKm)
+
+		seedJobs, err = runner.CreateGridSeedJobs(
+			r.cfg.LangCode,
+			r.input,
+			r.cfg.MaxDepth,
+			r.cfg.Email,
+			bbox,
+			r.cfg.GridCellKm,
+			r.cfg.Zoom,
+			dedup,
+			exitMonitor,
+			r.cfg.ExtraReviews,
+		)
+	} else {
+		seedJobs, err = runner.CreateSeedJobs(
+			r.cfg.FastMode,
+			r.cfg.LangCode,
+			r.input,
+			r.cfg.MaxDepth,
+			r.cfg.Email,
+			r.cfg.GeoCoordinates,
+			r.cfg.Zoom,
+			r.cfg.Radius,
+			dedup,
+			exitMonitor,
+			r.cfg.ExtraReviews,
+			r.cfg.ValidatePlaceIdUrl,
+		)
+	}
 	if err != nil {
 		return err
 	}
@@ -142,7 +171,8 @@ func (r *fileRunner) setInput() error {
 }
 
 func (r *fileRunner) setWriters() error {
-	if r.cfg.CustomWriter != "" {
+	switch {
+	case r.cfg.CustomWriter != "":
 		parts := strings.Split(r.cfg.CustomWriter, ":")
 		if len(parts) != 2 {
 			return fmt.Errorf("invalid custom writer format: %s", r.cfg.CustomWriter)
@@ -156,7 +186,9 @@ func (r *fileRunner) setWriters() error {
 		}
 
 		r.writers = append(r.writers, customWriter)
-	} else {
+	case r.cfg.LeadsDBAPIKey != "":
+		r.writers = append(r.writers, leadsdb.New(r.cfg.LeadsDBAPIKey))
+	default:
 		var resultsWriter io.Writer
 
 		switch r.cfg.ResultsFile {
@@ -203,8 +235,7 @@ func (r *fileRunner) setApp() error {
 			opts = append(opts, scrapemateapp.WithJS(
 				scrapemateapp.Headfull(),
 				scrapemateapp.DisableImages(),
-			),
-			)
+			))
 		} else {
 			opts = append(opts, scrapemateapp.WithJS(scrapemateapp.DisableImages()))
 		}
@@ -212,10 +243,12 @@ func (r *fileRunner) setApp() error {
 		opts = append(opts, scrapemateapp.WithStealth("firefox"))
 	}
 
+	opts = runner.AppendBrowserCapacityOptions(opts, r.cfg)
+
 	if !r.cfg.DisablePageReuse {
 		opts = append(opts,
 			scrapemateapp.WithPageReuseLimit(2),
-			scrapemateapp.WithPageReuseLimit(200),
+			scrapemateapp.WithBrowserReuseLimit(200),
 		)
 	}
 

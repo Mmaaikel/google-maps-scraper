@@ -72,6 +72,7 @@ type JobData struct {
 	Radius             int           `json:"radius"`
 	Depth              int           `json:"depth"`
 	Email              bool          `json:"email"`
+	ExtraReviews       bool          `json:"extra_reviews"`
 	MaxTime            time.Duration `json:"max_time"`
 	Proxies            []string      `json:"proxies"`
 	ValidatePlaceIdUrl string        `json:"validate_place_id_url"`

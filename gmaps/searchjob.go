@@ -35,8 +35,9 @@ type MapSearchParams struct {
 type SearchJob struct {
 	scrapemate.Job
 
-	params      *MapSearchParams
-	ExitMonitor exiter.Exiter
+	params                  *MapSearchParams
+	ExitMonitor             exiter.Exiter
+	WriterManagedCompletion bool
 }
 
 func NewSearchJob(params *MapSearchParams, opts ...SearchJobOptions) *SearchJob {
@@ -72,12 +73,30 @@ func WithSearchJobExitMonitor(exitMonitor exiter.Exiter) SearchJobOptions {
 	}
 }
 
+func WithSearchJobWriterManagedCompletion() SearchJobOptions {
+	return func(j *SearchJob) {
+		j.WriterManagedCompletion = true
+	}
+}
+
+func (j *SearchJob) ProcessOnFetchError() bool {
+	return true
+}
+
 func (j *SearchJob) Process(_ context.Context, resp *scrapemate.Response) (any, []scrapemate.IJob, error) {
 	defer func() {
 		resp.Document = nil
 		resp.Body = nil
 		resp.Meta = nil
 	}()
+
+	if resp.Error != nil {
+		if j.ExitMonitor != nil {
+			j.ExitMonitor.IncrSeedCompleted(1)
+		}
+
+		return nil, nil, resp.Error
+	}
 
 	body := removeFirstLine(resp.Body)
 	if len(body) == 0 {
@@ -102,9 +121,12 @@ func (j *SearchJob) Process(_ context.Context, resp *scrapemate.Response) (any, 
 	)
 
 	if j.ExitMonitor != nil {
-		j.ExitMonitor.IncrSeedCompleted(1)
 		j.ExitMonitor.IncrPlacesFound(len(entries))
-		j.ExitMonitor.IncrPlacesCompleted(len(entries))
+		j.ExitMonitor.IncrSeedCompleted(1)
+
+		if !j.WriterManagedCompletion {
+			j.ExitMonitor.IncrPlacesCompleted(len(entries))
+		}
 	}
 
 	return entries, nil, nil

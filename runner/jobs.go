@@ -10,9 +10,11 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/gosom/google-maps-scraper/deduper"
 	"github.com/gosom/google-maps-scraper/exiter"
 	"github.com/gosom/google-maps-scraper/gmaps"
+	"github.com/gosom/google-maps-scraper/grid"
 	"github.com/gosom/scrapemate"
 )
 
@@ -72,55 +74,17 @@ func CreateSeedJobs(
 	scanner := bufio.NewScanner(r)
 
 	for scanner.Scan() {
-		query := strings.TrimSpace(scanner.Text())
-		if query == "" {
+		q, ok, parseErr := parseQueryLine(scanner.Text())
+		if parseErr != nil {
+			return nil, parseErr
+		}
+
+		if !ok {
 			continue
 		}
 
-		// Clean URLs that are mistakenly used as search terms
-		if strings.HasPrefix(query, "http") {
-			fmt.Printf("WARNING: Input looks like a URL: %s\nCleaning for better search results.\n", query)
-
-			// For Google Maps URLs, extract meaningful parts
-			if strings.Contains(query, "google.com/maps") {
-				parts := strings.Split(query, "/")
-				cleaned := false
-
-				// Try to extract a meaningful part (not coordinates, not empty)
-				for i := len(parts) - 1; i >= 0; i-- {
-					part := parts[i]
-					if part != "" &&
-						!strings.HasPrefix(part, "@") &&
-						!strings.Contains(part, ",") &&
-						!strings.Contains(part, ".") {
-						query = part
-						fmt.Printf("Extracted query: %s\n", query)
-						cleaned = true
-						break
-					}
-				}
-
-				// If we couldn't find a good part, use a generic term
-				if !cleaned {
-					query = "restaurant"
-					fmt.Println("Could not extract meaningful search term from URL. Using 'business'.")
-				}
-			} else {
-				// For regular URLs, use the domain
-				parts := strings.Split(query, "/")
-				if len(parts) > 2 {
-					query = parts[2] // Usually the domain name
-					fmt.Printf("Using domain as query: %s\n", query)
-				}
-			}
-		}
-
-		var id string
-
-		if before, after, ok := strings.Cut(query, "#!#"); ok {
-			query = strings.TrimSpace(before)
-			id = strings.TrimSpace(after)
-		}
+		query := q.text
+		id := q.id
 
 		var job scrapemate.IJob
 
@@ -171,6 +135,138 @@ func CreateSeedJobs(
 	}
 
 	return jobs, scanner.Err()
+}
+
+// CreateGridSeedJobs reads search queries from r and produces one GmapJob per
+// (query, grid-cell) pair. Each cell covers approximately cellSizeKm × cellSizeKm
+// on the ground. The zoom level controls how much of the map Google Maps renders
+// per cell (use 14-16 for most cases).
+//
+// Deduplication across cells is handled automatically by the shared deduper.
+func CreateGridSeedJobs(
+	langCode string,
+	r io.Reader,
+	maxDepth int,
+	email bool,
+	bbox grid.BoundingBox,
+	cellSizeKm float64,
+	zoom int,
+	dedup deduper.Deduper,
+	exitMonitor exiter.Exiter,
+	extraReviews bool,
+) ([]scrapemate.IJob, error) {
+	if zoom < 1 || zoom > 21 {
+		return nil, fmt.Errorf("invalid zoom level: %d", zoom)
+	}
+
+	cells := grid.GenerateCells(bbox, cellSizeKm)
+	if len(cells) == 0 {
+		return nil, fmt.Errorf("grid produced 0 cells — check bounding box and cell size")
+	}
+
+	queries, err := readQueries(r)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(queries) == 0 {
+		return nil, fmt.Errorf("no queries found in input")
+	}
+
+	var jobs []scrapemate.IJob
+
+	for _, q := range queries {
+		queryText := q.text
+		queryID := q.id
+
+		for _, cell := range cells {
+			// Each cell gets a unique ID derived from the query ID (or a new UUID).
+			cellID := uuid.New().String()
+			if queryID != "" {
+				cellID = fmt.Sprintf("%s-%s", queryID, cellID)
+			}
+
+			opts := []gmaps.GmapJobOptions{}
+
+			if dedup != nil {
+				opts = append(opts, gmaps.WithDeduper(dedup))
+			}
+
+			if exitMonitor != nil {
+				opts = append(opts, gmaps.WithExitMonitor(exitMonitor))
+			}
+
+			if extraReviews {
+				opts = append(opts, gmaps.WithExtraReviews())
+			}
+
+			job := gmaps.NewGmapJob(
+				cellID,
+				langCode,
+				queryText,
+				maxDepth,
+				email,
+				cell.GeoCoordinates(),
+				zoom,
+				opts...,
+			)
+
+			jobs = append(jobs, job)
+		}
+	}
+
+	return jobs, nil
+}
+
+// query holds a parsed input line.
+type query struct {
+	text string
+	id   string
+}
+
+// readQueries reads all non-empty lines from r and parses optional custom IDs
+// using the "#!#" delimiter (same format as CreateSeedJobs).
+func readQueries(r io.Reader) ([]query, error) {
+	var queries []query
+
+	scanner := bufio.NewScanner(r)
+
+	for scanner.Scan() {
+		q, ok, parseErr := parseQueryLine(scanner.Text())
+		if parseErr != nil {
+			return nil, parseErr
+		}
+
+		if !ok {
+			continue
+		}
+
+		queries = append(queries, q)
+	}
+
+	return queries, scanner.Err()
+}
+
+func parseQueryLine(line string) (query, bool, error) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return query{}, false, nil
+	}
+
+	var q query
+
+	if before, after, ok := strings.Cut(line, "#!#"); ok {
+		q.text = strings.TrimSpace(before)
+		q.id = strings.TrimSpace(after)
+	} else {
+		q.text = line
+	}
+
+	if q.text == "" {
+		return query{}, false, fmt.Errorf("invalid query line %q: empty query text", line)
+	}
+
+	return q, true, nil
 }
 
 func LoadCustomWriter(pluginDir, pluginName string) (scrapemate.ResultWriter, error) {
